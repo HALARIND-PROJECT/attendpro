@@ -176,6 +176,16 @@ tr:hover td{background:#f5f7ff}
 .rtbl th .rz{position:absolute;right:0;top:0;width:5px;height:100%;cursor:col-resize;border-right:2px solid transparent;transition:border-color .12s}
 .rtbl th:hover .rz,.rtbl th .rz.rz-on{border-right-color:var(--blue)}
 .rtbl td{padding:4px 7px;font-size:11px;border-bottom:1px solid var(--bg3);vertical-align:middle;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sync-bar{position:fixed;top:0;left:0;right:0;z-index:99999;height:28px;display:flex;align-items:center;justify-content:center;gap:8px;font-size:11px;font-weight:700;pointer-events:none;transition:background .4s}
+.sync-bar.sb-ok{background:#059669;color:#fff}
+.sync-bar.sb-sync{background:#d97706;color:#fff}
+.sync-bar.sb-err{background:#dc2626;color:#fff;pointer-events:all;cursor:pointer}
+.sync-bar.sb-local{background:#6b7280;color:#fff}
+.sync-bar.sb-loading{background:#2563eb;color:#fff}
+.sync-dot{width:8px;height:8px;border-radius:50%;background:rgba(255,255,255,.9);flex-shrink:0}
+.sync-dot.sp{animation:sp 1.2s ease-in-out infinite}
+@keyframes sp{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.3;transform:scale(.6)}}
+body{padding-top:28px}
 </style>
 </head>
 <body>
@@ -2851,6 +2861,18 @@ function AuditLog({logs,setLogs,curUser}){
 }
 
 /* ══════════════════════ ROOT APP ══════════════════════ */
+function SyncBar({dbReady,syncing,syncError,dbConnected}){
+  let cls='sync-bar ',dot=false,msg='';
+  if(!dbConnected){cls+='sb-local';msg='⚠  Local mode — Firebase not connected. Changes will not be saved to cloud.';}
+  else if(!dbReady){cls+='sb-loading';dot=true;msg='⏳  Connecting to Firebase cloud database...';}
+  else if(syncing){cls+='sb-sync';dot=true;msg='⏺  Saving changes to cloud...';}
+  else if(syncError){cls+='sb-err';msg='❌  Sync error: '+syncError;}
+  else{cls+='sb-ok';msg='☁  Cloud sync ON — All data is saved to Firebase';}
+  return h('div',{className:cls},
+    h('div',{className:'sync-dot'+(dot?' sp':'')},null),
+    h('span',null,msg)
+  );
+}
 function App(){
   const[contractors,setContractors]=useState(INIT_CONTRACTORS);
   const[depts,setDepts]=useState(INIT_DEPTS);
@@ -2872,6 +2894,8 @@ function App(){
   // ══════════════════════════════════════════════════
   const[dbReady,setDbReady]=useState(false);
   const[syncing,setSyncing]=useState(false);
+  const[syncError,setSyncError]=useState(null);
+  const[dbConnected,setDbConnected]=useState(!!window.__db);
   const saveTimers=useRef({});
 
   // ── Helper: save one collection doc to Firestore
@@ -2880,17 +2904,17 @@ function App(){
     if(!db)return;
     clearTimeout(saveTimers.current[col+'_'+id]);
     saveTimers.current[col+'_'+id]=setTimeout(()=>{
-      setSyncing(true);
+      setSyncing(true);setSyncError(null);
       db.collection(col).doc(id).set(data)
-        .then(()=>setSyncing(false))
-        .catch(e=>{setSyncing(false);console.error('[AttendPro] Save error:',e.message);});
+        .then(()=>{setSyncing(false);setSyncError(null);})
+        .catch(e=>{setSyncing(false);setSyncError(e.message);console.error('[AttendPro] Save error:',e.message);});
     },800); // debounce 800ms
   }
 
   // ── LOAD ALL DATA from Firestore on first mount
   useEffect(()=>{
     const db=window.__db;
-    if(!db){console.warn('[AttendPro] Firestore not available — using local data');setDbReady(true);return;}
+    if(!db){console.warn('[AttendPro] Firestore not available — using local data');setDbReady(true);setDbConnected(false);return;}
     console.log('[AttendPro] Loading data from Firestore...');
     Promise.all([
       db.collection('ap_config').doc('emps').get(),
@@ -2911,10 +2935,11 @@ function App(){
       if(hSnap.exists && hSnap.data().v){setHcodes(hSnap.data().v);}
       if(oSnap.exists && oSnap.data().v){setOt2Cats(oSnap.data().v);}
       if(lSnap.exists && lSnap.data().v){setLogs(lSnap.data().v);}
-      setDbReady(true);
+      setDbReady(true);setDbConnected(true);setSyncError(null);
       console.log('[AttendPro] ✅ All data loaded from Firestore');
     }).catch(e=>{
       console.error('[AttendPro] Load error:',e.message);
+      setSyncError(e.message);setDbConnected(false);
       setDbReady(true); // still show app with local data
     });
   },[]);
@@ -2958,6 +2983,7 @@ function App(){
   const rd=ROLE_DEFS[user.role];
 
   return h('div',{style:{display:'flex',flexDirection:'column',height:'100vh',overflow:'hidden'}},
+    h(SyncBar,{dbReady,syncing,syncError,dbConnected}),
     /* Top Bar */
     h('header',{className:'topbar'},
       h('div',{style:{display:'flex',alignItems:'center',gap:9}},
@@ -2968,8 +2994,7 @@ function App(){
       h('div',{style:{display:'flex',alignItems:'center',gap:10}},
         h('div',{style:{fontSize:10,color:'var(--txt3)',display:'flex',gap:10}},h('span',null,'OT-1 >'+OT1_THR+'h ×1.5'),h('span',null,'OT-2 ×2 manual'),h('span',null,emps.length+'/1000')),
         h(Av,{name:user.displayName||empName(user),size:28}),
-        h('div',null,h('div',{style:{fontSize:11,fontWeight:700}},user.displayName||empName(user)),
-          syncing&&h('span',{style:{fontSize:9,color:'#d97706',fontWeight:600,marginLeft:4}},'⏺ syncing...'),rd&&h('div',{style:{fontSize:9,color:rd.color,fontWeight:600}},rd.label)),
+        h('div',null,h('div',{style:{fontSize:11,fontWeight:700}},user.displayName||empName(user)),rd&&h('div',{style:{fontSize:9,color:rd.color,fontWeight:600}},rd.label)),
         h('button',{onClick:()=>{addLog('Logout',user.id);setUser(null);},className:'btn btn-ghost btn-sm'},'Logout')
       )
     ),
