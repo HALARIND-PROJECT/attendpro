@@ -2867,6 +2867,71 @@ function App(){
   const[sidebarOpen,setSidebarOpen]=useState(true);
   const tRef=useRef(null);
 
+  // ══════════════════════════════════════════════════
+  // FIRESTORE SYNC — load on mount, save on change
+  // ══════════════════════════════════════════════════
+  const[dbReady,setDbReady]=useState(false);
+  const[syncing,setSyncing]=useState(false);
+  const saveTimers=useRef({});
+
+  // ── Helper: save one collection doc to Firestore
+  function fsSave(col,id,data){
+    const db=window.__db;
+    if(!db)return;
+    clearTimeout(saveTimers.current[col+'_'+id]);
+    saveTimers.current[col+'_'+id]=setTimeout(()=>{
+      setSyncing(true);
+      db.collection(col).doc(id).set(data)
+        .then(()=>setSyncing(false))
+        .catch(e=>{setSyncing(false);console.error('[AttendPro] Save error:',e.message);});
+    },800); // debounce 800ms
+  }
+
+  // ── LOAD ALL DATA from Firestore on first mount
+  useEffect(()=>{
+    const db=window.__db;
+    if(!db){console.warn('[AttendPro] Firestore not available — using local data');setDbReady(true);return;}
+    console.log('[AttendPro] Loading data from Firestore...');
+    Promise.all([
+      db.collection('ap_config').doc('emps').get(),
+      db.collection('ap_config').doc('att').get(),
+      db.collection('ap_config').doc('sysUsers').get(),
+      db.collection('ap_config').doc('contractors').get(),
+      db.collection('ap_config').doc('depts').get(),
+      db.collection('ap_config').doc('hcodes').get(),
+      db.collection('ap_config').doc('ot2Cats').get(),
+      db.collection('ap_config').doc('logs').get(),
+    ]).then(([eSnap,aSnap,uSnap,cSnap,dSnap,hSnap,oSnap,lSnap])=>{
+      if(eSnap.exists && eSnap.data().v){setEmps(eSnap.data().v);console.log('[AttendPro] Loaded employees from Firestore');}
+      else{console.log('[AttendPro] No employees in Firestore — using seed data');}
+      if(aSnap.exists && aSnap.data().v){setAtt(aSnap.data().v);console.log('[AttendPro] Loaded attendance from Firestore');}
+      if(uSnap.exists && uSnap.data().v){setSysUsers(uSnap.data().v);}
+      if(cSnap.exists && cSnap.data().v){setContractors(cSnap.data().v);}
+      if(dSnap.exists && dSnap.data().v){setDepts(dSnap.data().v);}
+      if(hSnap.exists && hSnap.data().v){setHcodes(hSnap.data().v);}
+      if(oSnap.exists && oSnap.data().v){setOt2Cats(oSnap.data().v);}
+      if(lSnap.exists && lSnap.data().v){setLogs(lSnap.data().v);}
+      setDbReady(true);
+      console.log('[AttendPro] ✅ All data loaded from Firestore');
+    }).catch(e=>{
+      console.error('[AttendPro] Load error:',e.message);
+      setDbReady(true); // still show app with local data
+    });
+  },[]);
+
+  // ── SAVE each state to Firestore whenever it changes (skip first render)
+  const isFirstRender=useRef(true);
+  useEffect(()=>{if(isFirstRender.current)return;fsSave('ap_config','emps',{v:emps,t:Date.now()});},[emps]);
+  useEffect(()=>{if(isFirstRender.current)return;fsSave('ap_config','att',{v:att,t:Date.now()});},[att]);
+  useEffect(()=>{if(isFirstRender.current)return;fsSave('ap_config','sysUsers',{v:sysUsers,t:Date.now()});},[sysUsers]);
+  useEffect(()=>{if(isFirstRender.current)return;fsSave('ap_config','contractors',{v:contractors,t:Date.now()});},[contractors]);
+  useEffect(()=>{if(isFirstRender.current)return;fsSave('ap_config','depts',{v:depts,t:Date.now()});},[depts]);
+  useEffect(()=>{if(isFirstRender.current)return;fsSave('ap_config','hcodes',{v:hcodes,t:Date.now()});},[hcodes]);
+  useEffect(()=>{if(isFirstRender.current)return;fsSave('ap_config','ot2Cats',{v:ot2Cats,t:Date.now()});},[ot2Cats]);
+  useEffect(()=>{if(isFirstRender.current)return;fsSave('ap_config','logs',{v:logs,t:Date.now()});},[logs]);
+  useEffect(()=>{isFirstRender.current=false;},[]);
+
+
   function showToast(msg,type='ok'){clearTimeout(tRef.current);setToast({msg,type});tRef.current=setTimeout(()=>setToast(null),3000);}
   function addLog(action,target){if(!user)return;setLogs(p=>[{id:Date.now(),ts:new Date().toISOString(),actor:user.id,action,target,module:'System'},...p.slice(0,499)]);}
   function setAttLogged(fn){setAtt(fn);}
@@ -2898,12 +2963,13 @@ function App(){
       h('div',{style:{display:'flex',alignItems:'center',gap:9}},
         h('button',{onClick:()=>setSidebarOpen(p=>!p),style:{background:'none',border:'none',fontSize:18,cursor:'pointer',color:'var(--txt2)',padding:'4px 6px',borderRadius:6,lineHeight:1}},sidebarOpen?'◀':'▶'),
         h('div',{style:{width:30,height:30,background:'linear-gradient(135deg,#2563eb,#7c3aed)',borderRadius:8,display:'flex',alignItems:'center',justifyContent:'center',fontSize:15,fontWeight:900,color:'#fff',boxShadow:'0 2px 8px rgba(37,99,235,.28)'}},'A'),
-        h('div',null,h('div',{style:{fontWeight:800,fontSize:13,letterSpacing:'-.3px'}},'AttendPro Enterprise'),h('div',{style:{fontSize:9,color:'var(--txt3)'}},'v6.6 · 2026–2030'))
+        h('div',null,h('div',{style:{fontWeight:800,fontSize:13,letterSpacing:'-.3px'}},'AttendPro Enterprise'),h('div',{style:{fontSize:9,color:'var(--txt3)'}},'v6.6 · 2026–2030'),h('div',{style:{fontSize:9,color:window.__db?'#059669':'#dc2626',fontWeight:700,marginTop:1}},window.__db?'☁ Cloud sync ON':'⚠ Local only'))
       ),
       h('div',{style:{display:'flex',alignItems:'center',gap:10}},
         h('div',{style:{fontSize:10,color:'var(--txt3)',display:'flex',gap:10}},h('span',null,'OT-1 >'+OT1_THR+'h ×1.5'),h('span',null,'OT-2 ×2 manual'),h('span',null,emps.length+'/1000')),
         h(Av,{name:user.displayName||empName(user),size:28}),
-        h('div',null,h('div',{style:{fontSize:11,fontWeight:700}},user.displayName||empName(user)),rd&&h('div',{style:{fontSize:9,color:rd.color,fontWeight:600}},rd.label)),
+        h('div',null,h('div',{style:{fontSize:11,fontWeight:700}},user.displayName||empName(user)),
+          syncing&&h('span',{style:{fontSize:9,color:'#d97706',fontWeight:600,marginLeft:4}},'⏺ syncing...'),rd&&h('div',{style:{fontSize:9,color:rd.color,fontWeight:600}},rd.label)),
         h('button',{onClick:()=>{addLog('Logout',user.id);setUser(null);},className:'btn btn-ghost btn-sm'},'Logout')
       )
     ),
